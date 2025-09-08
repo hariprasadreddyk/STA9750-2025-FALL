@@ -1,5 +1,5 @@
 ---
-title: WElCOME TO MY WEBSITE _/\_
+title: WElCOME TO MY WEBSITE
 ---
 
 Hi, this is Hari!
