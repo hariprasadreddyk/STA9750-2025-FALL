@@ -1,8 +1,8 @@
 ---
-title: "YOUR TITLE GOES HERE"
+title: WElCOME TO MY WEBSITE _/\_
 ---
 
-#Hi, this is Hari!
+Hi, this is Hari!
 
 ```{r}
 #| include: false
