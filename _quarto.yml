@@ -8,6 +8,7 @@ website:
     Course Projects for STA 9750 at Baruch College
   site-url: "https://hariprasadreddyk.github.io/STA9750-2025-FALL/"
   navbar:
+    background: primary
     left:
       - href: index.qmd
         text: Home
