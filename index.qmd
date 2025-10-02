@@ -3,6 +3,7 @@ title: Welcome to My Website 🎉
 ---
 
 Hi, this is Hari!
+
 On this site, you’ll find my mini-projects for STA 9750 and other data explorations.  
 
 ```{r}
