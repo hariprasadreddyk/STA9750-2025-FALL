@@ -349,7 +349,6 @@ week_q10 <- debut_spread$debut_week
 ## Stranger Things Dominates Global Screens Ahead of Final Season
 
 ```{r}
-## Stranger Things Dominates Global Screens Ahead of Final Season
 #| code-fold: true
 #| code-summary: "Show code"
 
