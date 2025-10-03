@@ -169,7 +169,7 @@ runtime_q3 <- longest_film$runtime_minutes
 The longest film is **`r film_name_q3`** at **`r runtime_q3`** minutes.
 
 
-**\br Programs with the most total hours of global viewership:**
+*\br Programs with the most total hours of global viewership:*
 
 ```{r}
 #| code-fold: true
@@ -455,11 +455,11 @@ hindi_peak_week  <- hindi_peak$week
 
 ```
 
-Netflix’s growth in India has been fueled by **Hindi-language Originals** that resonate with local audiences.  
-Together, these titles have generated over **`r scales::comma(hindi_hours)`** hours of global viewing time.  
+Netflix’s growth in India has been fueled by a steadily expanding slate of Hindi-language Originals that deeply resonate with local audiences and increasingly travel well outside the subcontinent. These productions — ranging from prestige dramas to mass-appeal films — have collectively generated over **`r scales::comma(hindi_hours)`** hours of global viewing time, underscoring their growing role in Netflix’s international portfolio.
 
-In India, **`r hindi_titles`** distinct shows and films have appeared in the Top 10, for a combined **`r hindi_weeks`** weeks.  
-The strongest performance came from *`r hindi_peak_title`*, which peaked at **`r scales::comma(hindi_peak_hours)`** hours of global viewing in the week of **`r format(hindi_peak_week, "%Y-%m-%d")`**.  
+Within India itself, **`r hindi_titles`** distinct shows and films have broken into the weekly Top 10 rankings, holding their place on the charts for a combined **`r hindi_weeks`** weeks. This breadth of programming demonstrates not only the platform’s commitment to diverse storytelling in Hindi, but also the strong appetite among Indian viewers for homegrown content.
+
+Among these successes, the standout has been **`r hindi_peak_title`**, which achieved a peak of more than **`r scales::comma(hindi_peak_hours)`** hours of global viewing in the week of **`r format(hindi_peak_week, "%Y-%m-%d")`**. That performance highlights the ability of a single Hindi Original to capture attention on a worldwide scale, further validating Netflix’s strategy of investing in high-quality, locally rooted stories that speak to both domestic and global audiences. 
 
 ------------------------------------------------------------------------
 
