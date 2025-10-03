@@ -18,7 +18,8 @@ website:
 format:
   html:
     theme: cosmo
-    toc: false
+    toc: true
+    toc-location: right
 
 editor:
   mode: source
