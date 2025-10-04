@@ -519,3 +519,72 @@ On the other hand, TV shows continue to dominate in overall engagement, with mor
 This comparison underscores Netflix’s unique ability to succeed in both formats: films drive event-level spikes in viewership, while series sustain long-term audience engagement across multiple weeks and seasons. Together, they illustrate Netflix’s dual role as both a global box-office replacement and a traditional TV disruptor.
 
 
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "‘Squid Game’ dominates Netflix's global viewership charts."
+#| fig-align: "center"
+
+library(ggplot2)
+library(scales)
+library(dplyr)
+
+ggplot(category_summary, aes(x = reorder(category, total_hours), y = total_hours, fill = category)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  scale_y_continuous(labels = label_number(scale_cut = cut_short_scale())) +
+  labs(
+    title = "Total Viewing Hours by Category",
+    subtitle = "Comparison across English and Non-English Films and TV Shows",
+    x = NULL,
+    y = "Total Hours Viewed (Billions)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray30"),
+    axis.text.x = element_text(face = "bold", size = 11, color = "gray20"),
+    axis.text.y = element_text(size = 10, color = "gray30"),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_fill_manual(values = c("#ff6b6b", "#9acd32", "#00bcd4", "#c792ea"))
+
+```
+
+```{r}
+#| code-fold: true
+#| code-summary: "Show code"
+ 
+library(ggplot2)
+library(scales)
+library(dplyr)
+
+# Top 10 globally most-watched TV titles (any language)
+top_tv_titles <- GLOBAL_TOP_10 |>
+  filter(str_detect(category, "^TV")) |>
+  group_by(show_title) |>
+  summarise(total_hours = sum(weekly_hours_viewed, na.rm = TRUE), .groups = "drop") |>
+  slice_max(total_hours, n = 10) |>
+  arrange(total_hours)
+
+ggplot(top_tv_titles, aes(x = reorder(show_title, total_hours), y = total_hours)) +
+  geom_col(fill = "#00bcd4") +
+  coord_flip() +
+  scale_y_continuous(labels = label_number(scale_cut = cut_short_scale())) +
+  labs(
+    title = "Top 10 Most-Watched Netflix TV Series (Global)",
+    subtitle = "‘Squid Game’ stands far above other series by total hours viewed",
+    x = NULL,
+    y = "Total Hours Viewed (Billions)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40"),
+    axis.text.x = element_text(size = 10, color = "gray30"),
+    axis.text.y = element_text(face = "bold", size = 10, color = "gray20")
+  )
+```
+
