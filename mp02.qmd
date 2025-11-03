@@ -1724,7 +1724,7 @@ all_sectors <- sponsor_employment |>
 rent_comparison <- yimby_analysis |>
   dplyr::filter(
     NAME %in% c(primary_sponsor_metro$NAME, nimby_metro$NAME),
-    year == 2023
+    year == 2023 
   ) |>
   dplyr::select(NAME, rent_burden_index, monthly_rent, household_income) |>
   dplyr::mutate(
