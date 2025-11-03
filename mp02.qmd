@@ -764,7 +764,7 @@ This visualization shows that **healthcare employment** scales closely with **to
 The consistent **linear trend** across all years indicates that regions with *larger workforces* consistently have *higher healthcare employment*.
 Slight growth in later years suggests that major metros expanded their healthcare sectors, reinforcing its role as a stable and essential part of local economies.
 
-## 3.3 Evolution of Average Household Size (Spaghetti + Highlight NYC & LA)
+## 3.3 Evolution of Average Household Size (Spaghetti + Highlight NYC & LA) *(Extra Credit #02)*
 ```{r}
 #| label: task3-viz3-household-size
 #| code-summary: "Visualization 3: Evolution of average household size over time (with gghighlight)"
