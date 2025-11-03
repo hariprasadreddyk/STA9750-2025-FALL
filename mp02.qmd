@@ -633,7 +633,9 @@ DT::datatable(
   DT::formatCurrency(c("Total Wages (All Industries)", "Finance & Insurance Wages"), currency = "$")
 ```
 
-Add details?????????????????
+
+In the New York–Northern New Jersey–Long Island Metro Area, the **finance and insurance sector (NAICS 52)** consistently contributed around **4% of all wages** between 2009 and 2018.  
+The fraction peaked in **2014**, when finance and insurance employees earned **4.6% of the total wages** in the metro area — the highest share across the period.  
 
 # Task 3: Initial Visualizations
 
@@ -687,8 +689,6 @@ This visualization shows a **strong positive relationship** between *household i
 Each point represents a CBSA (Core Based Statistical Area), where *higher annual household incomes* are generally associated with *higher average rents*.
 
 The fitted **regression line** confirms this **linear trend**, suggesting that housing costs tend to scale proportionally with local income levels — areas with more affluent households face higher rental prices.
-
-This relationship reflects how local affordability challenges emerge: while wealthier regions can support higher rents, lower-income metros remain constrained by limited wage growth, influencing overall housing accessibility.
 
 ## 3.2 Total Employment vs Health Care & Social Assistance (NAICS 62) over time
 
@@ -943,9 +943,9 @@ datatable(
 
 **Analysis:** 
 
-The New York-Newark-Jersey City metro area consistently maintains a Burden Index above 110, indicating that residents face housing costs approximately 10-18% higher than the 2009 national baseline. 
+The **New York-Newark-Jersey City metro area** consistently maintains a **Burden Index above 110**, indicating that residents face housing costs approximately **10-18%** higher than the **2009** national baseline. 
 
-The index peaked in 2014 (118.1) and has shown volatility, with a notable spike in 2021 (117.2) following pandemic-era market disruptions. Despite income growth from $62,887 to $95,220 (2009-2023), rents have kept pace, maintaining elevated burden levels throughout the period.
+The index peaked in **2014 (118.1)** and has shown volatility, with a notable spike in **2021 (117.2)** following pandemic-era market disruptions. Despite income growth from **$62,887** to **$95,220** (2009-2023), rents have kept pace, maintaining elevated burden levels throughout the period.
 
 ## Table 2: Highest and Lowest Rent Burden Metro Areas
 
@@ -1057,11 +1057,6 @@ housing_growth_data <- POPULATION |>
   dplyr::ungroup() |>
   # Filter to years where 5-year lookback is available (2014+)
   dplyr::filter(year >= 2014, !is.na(population_5yr_ago))
-
-# Display summary for verification
-cat("Housing growth data prepared.\n")
-cat(glue("Years covered: {min(housing_growth_data$year)} to {max(housing_growth_data$year)}\n"))
-cat(glue("Number of CBSAs: {length(unique(housing_growth_data$CBSA))}\n"))
 ```
 
 ```{r}
@@ -1088,8 +1083,6 @@ housing_growth_data <- housing_growth_data |>
   dplyr::mutate(
     instantaneous_index = (permits_per_1000 / baseline_instantaneous) * 100
   )
-
-cat(glue("Instantaneous Growth Baseline (2014 median): {round(baseline_instantaneous, 2)} permits per 1,000 residents\n"))
 ```
 
 ```{r}
@@ -1125,8 +1118,6 @@ housing_growth_data <- housing_growth_data |>
   dplyr::mutate(
     rate_based_index = (permits_to_growth_ratio / baseline_rate) * 100
   )
-
-cat(glue("Rate-Based Growth Baseline (2014 median): {round(baseline_rate, 1)}% (permits relative to 5-yr pop growth)\n"))
 ```
 
 ## Metric 1: Instantaneous Housing Growth
@@ -1359,21 +1350,13 @@ The Composite Housing Growth Score combines both metrics using a weighted averag
 
 ---
 
-**Key Findings from Composite Housing Growth Analysis:**
+**Key Findings:**
 
-**YIMBY Champions - Top Performers:**
-- **Small-to-Mid Markets Leading:** Springfield, OH; Dalton, GA; and Brunswick-St. Simons, GA show that smaller metros can achieve exceptional pro-housing outcomes
-- **Major Metro Success:** Miami-Fort Lauderdale ranks 8th overall, demonstrating that large metros can maintain strong housing production
-- **Southern Strategy:** Southern metros dominate the top 15, suggesting regional policy differences favoring development
+- **YIMBY Champions:** Small-to-mid markets (Springfield, OH; Dalton, GA) lead nationally, with Southern metros dominating the top 15. Miami-Fort Lauderdale (8th) proves large metros can succeed with pro-housing policies.
 
-**Growth Constrained Markets - Bottom Performers:**
-- **Declining Markets:** Morgantown, WV (6.1 composite) and Enid, OK (20.7) struggle with both low absolute construction and poor growth response
-- **Supply Bottlenecks:** Atlantic City, NJ (17.6) and Longview, TX (21.2) show inadequate supply response to population pressures
-- **Appalachian/Great Plains Pattern:** These regions disproportionately represented among constrained markets
+- **Growth Constrained:** Morgantown, WV (6.1) and Atlantic City, NJ (17.6) show inadequate supply response. Appalachian/Great Plains metros disproportionately struggle.
 
-**Policy Implications:**
-
-Markets with high composite scores demonstrate that pro-housing policies can succeed across different contexts—from fast-growing Sun Belt metros to slower-growth Midwest markets. The gap between leaders (3,329.7) and laggards (6.1) suggests significant room for policy intervention to improve housing supply responsiveness.
+- **Policy Implications:** The 550x gap between top and bottom performers suggests significant room for policy intervention to improve housing supply responsiveness.
 
 
 # Task 6: Visualization
@@ -1449,23 +1432,18 @@ yimby_success <- yimby_analysis |>
     # Full YIMBY success = all 4 criteria
     yimby_success = yimby_score == 4
   )
-
-cat(glue("Total metros in analysis: {nrow(yimby_success)}\n"))
-cat(glue("YIMBY Success Stories (all 4 criteria): {sum(yimby_success$yimby_success)}\n"))
-cat(glue("3 of 4 criteria met: {sum(yimby_success$yimby_score == 3)}\n"))
 ```
 
 **YIMBY Identification Criteria:**
 
-We identify YIMBY success stories as metros meeting all four conditions:<\br>
-1. ✅ **High Initial Burden:** Above-median rent burden in 2014-2016 <\br>
-2. ✅ **Improved Affordability:** Decreased rent burden from early to recent period  <\br>
-3. ✅ **Growing Markets:** Positive population growth (not declining cities) <\br>
-4. ✅ **Strong Supply Response:** Above-median housing growth score <\br>
+We identify YIMBY success stories as metros meeting **all four conditions:**
 
-**Results:** 30 metros (out of 308 analyzed) meet all four YIMBY success criteria.
+1. ✅ **High Initial Burden:** Above-median rent burden (2014-2016)
+2. ✅ **Improved Affordability:** Decreased rent burden over study period
+3. ✅ **Growing Markets:** Positive population growth (not declining cities)
+4. ✅ **Strong Supply Response:** Above-median housing growth score
 
----
+**Results:** 30 of 308 metros meet all four YIMBY success criteria.
 
 ### Visualization 1: YIMBY Success Quadrant
 ```{r}
@@ -1640,19 +1618,18 @@ p2
 
 **Temporal Analysis:**
 
-All five top-performing metros showed sustained rent burden reduction over the 2014-2023 period:
-
-- **Bangor, ME:** Most consistent decline (104 → 95), demonstrating steady policy commitment
+All five top-performing metros showed sustained rent burden reduction (2014-2023):
+- **Bangor, ME:** Most consistent decline (104 → 95)
 - **Brownsville-Harlingen, TX:** Net improvement despite volatility (125 → 107)
 - **Redding, CA:** Dramatic improvement after 2018 peak (129 → 110)
 
-These trajectories prove that YIMBY success requires sustained multi-year commitment to housing production, not one-time policy changes.
+These trajectories demonstrate that YIMBY success requires sustained multi-year commitment, not one-time policy changes.
 
 ---
 
 **Conclusion:**
 
-These 30 YIMBY success stories demonstrate that building housing can improve affordability even in growing, desirable markets. Success spans diverse contexts—from small Southern metros to coastal communities—proving that pro-housing policies work when sustained over time.
+These 30 YIMBY success stories demonstrate that building housing improves affordability in growing markets. Success spans diverse contexts—from small Southern metros to coastal communities—proving pro-housing policies work when sustained over time.
 
 # Task 7: Policy Brief
 
@@ -1689,16 +1666,6 @@ nimby_metro <- yimby_success |>
   ) |>
   dplyr::arrange(desc(population), desc(early_rent_burden)) |>
   dplyr::slice_head(n = 1)
-
-cat(glue("Primary Sponsor (YIMBY Success): {primary_sponsor_metro$NAME}\n"))
-cat(glue("  - Population: {scales::comma(primary_sponsor_metro$population)}\n"))
-cat(glue("  - Rent Burden Change: {round(primary_sponsor_metro$rent_burden_change, 1)}\n"))
-cat(glue("  - Housing Growth Score: {round(primary_sponsor_metro$avg_composite_score, 1)}\n\n"))
-
-cat(glue("Co-Sponsor (NIMBY Challenge): {nimby_metro$NAME}\n"))
-cat(glue("  - Population: {scales::comma(nimby_metro$population)}\n"))
-cat(glue("  - Rent Burden Change: +{round(nimby_metro$rent_burden_change, 1)}\n"))
-cat(glue("  - Housing Growth Score: {round(nimby_metro$avg_composite_score, 1)}\n"))
 ```
 
 ```{r}
@@ -1706,14 +1673,11 @@ cat(glue("  - Housing Growth Score: {round(nimby_metro$avg_composite_score, 1)}\
 #| code-summary: "Analyze key occupations - FIPS format corrected"
 #| message: false
 #| warning: false
+#| include: false
 
 # Format FIPS correctly with leading zeros and C prefix
 albuquerque_fips <- glue("C{sprintf('%05d', primary_sponsor_metro$CBSA)}")
 atlanta_fips <- glue("C{sprintf('%05d', nimby_metro$CBSA)}")
-
-cat("Formatted FIPS codes:\n")
-cat(glue("Albuquerque: {albuquerque_fips}\n"))
-cat(glue("Atlanta: {atlanta_fips}\n"))
 
 # Get employment data with correct FIPS format
 sponsor_employment <- WAGES |>
@@ -1725,11 +1689,6 @@ sponsor_employment <- WAGES |>
   dplyr::mutate(
     metro = if_else(FIPS == albuquerque_fips, "Albuquerque", "Atlanta")
   )
-
-cat("\nData check:\n")
-sponsor_employment |>
-  dplyr::count(metro) |>
-  print()
 
 # Get healthcare (NAICS 62) and construction (NAICS 23)
 key_sectors <- sponsor_employment |>
@@ -1750,9 +1709,6 @@ key_sectors <- sponsor_employment |>
     values_from = c(employment, avg_wage)
   )
 
-cat("\nHealthcare and Construction Sector Comparison:\n")
-print(key_sectors)
-
 # Get all level 1 sectors
 all_sectors <- sponsor_employment |>
   dplyr::filter(!is.na(level1_title)) |>
@@ -1763,18 +1719,6 @@ all_sectors <- sponsor_employment |>
     .groups = "drop"
   ) |>
   dplyr::arrange(metro, desc(employment))
-
-cat("\nTop Sectors by Employment (Albuquerque):\n")
-all_sectors |>
-  dplyr::filter(metro == "Albuquerque") |>
-  dplyr::slice_head(n = 5) |>
-  print()
-
-cat("\nTop Sectors by Employment (Atlanta):\n")
-all_sectors |>
-  dplyr::filter(metro == "Atlanta") |>
-  dplyr::slice_head(n = 5) |>
-  print()
 
 # Calculate affordability impact
 rent_comparison <- yimby_analysis |>
@@ -1788,18 +1732,7 @@ rent_comparison <- yimby_analysis |>
     annual_rent = monthly_rent * 12,
     rent_as_pct_income = (annual_rent / household_income) * 100
   )
-
-cat("\nRent Burden Comparison (2023):\n")
-print(rent_comparison)
-
-# Calculate savings for healthcare workers
-cat("\nAffordability Impact Calculation:\n")
-cat(glue("If Atlanta healthcare workers ({key_sectors$employment_Atlanta[key_sectors$sector_name == 'Healthcare & Social Services']} workers) "))
-cat(glue("had Albuquerque's rent burden, they would save:\n"))
-cat(glue("Current: {rent_comparison$rent_as_pct_income[rent_comparison$metro == 'Atlanta'] |> round(1)}% of income on rent\n"))
-cat(glue("Target: {rent_comparison$rent_as_pct_income[rent_comparison$metro == 'Albuquerque'] |> round(1)}% of income on rent\n"))
 ```
-
 ---
 
 # POLICY BRIEF
@@ -1946,13 +1879,7 @@ Albuquerque proves American cities can grow while staying affordable. Atlanta de
 
 **The data is clear. The solutions work. The question is whether Congress will act.**
 
-This bill positions both sponsors as leaders on housing affordability—the defining economic issue for working families and young Americans. 
-
----
-
-**Supporting data, detailed methodology, and economic impact analysis available upon request.**
-
----
+This bill positions both sponsors as leaders on housing affordability—the defining economic issue for working families and young Americans.
 
 
 ------------------------------------------------------------------------
