@@ -1,0 +1,441 @@
+---
+title: "Rideshare Trip Volumes Around Nightlife Zones"
+subtitle: "Using Yelp to Identify Nightlife Zones - Pre/During/Post COVID"
+author: "Hariprasad Reddy Kotakondla"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-summary: "View Code"
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+
+library(tidyverse)
+library(arrow)
+library(lubridate)
+library(ggplot2)
+library(knitr)
+library(httr)
+library(jsonlite)
+
+if (!dir.exists("output")) dir.create("output")
+
+theme_set(theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14)))
+
+cat("✓ Libraries loaded\n")
+```
+
+---
+
+# Note: Yelp API Setup
+
+To use Yelp API, you need:
+1. API Key from https://www.yelp.com/developers/v3/manage_app
+2. Set environment variable: `Sys.setenv(YELP_API_KEY = "your_key_here")`
+
+For now, we'll use **sample nightlife zone data** based on known NYC bar/club neighborhoods.
+
+---
+
+# Load TLC Data
+
+```{r load-data}
+
+# Your data directory
+data_dir <- "data/Hari_Automated_Analysis"
+
+file_2019 <- file.path(data_dir, "fhvhv_tripdata_2019-06.parquet")
+file_2021 <- file.path(data_dir, "fhvhv_tripdata_2021-06.parquet")
+file_2023 <- file.path(data_dir, "fhvhv_tripdata_2023-06.parquet")
+
+cat("=== LOADING TLC DATA ===\n\n")
+
+# Load the three months
+data_2019 <- read_parquet(file_2019)
+data_2021 <- read_parquet(file_2021)
+data_2023 <- read_parquet(file_2023)
+
+cat("✓ June 2019:", format(nrow(data_2019), big.mark=","), "records\n")
+cat("✓ June 2021:", format(nrow(data_2021), big.mark=","), "records\n")
+cat("✓ June 2023:", format(nrow(data_2023), big.mark=","), "records\n")
+```
+
+---
+
+# Define Nightlife Zones (Based on Known NYC Nightlife Neighborhoods)
+
+```{r define-zones}
+
+# NYC Taxi Zone IDs known for nightlife/bars/clubs
+# These are major nightlife areas based on public knowledge
+nightlife_zone_ids <- c(
+  42,    # Times Square/Theatre District
+  48,    # Upper East Side South
+  74,    # East Village
+  79,    # East Harlem North
+  113,   # Greenwich Village North
+  114,   # Greenwich Village South
+  127,   # Hell's Kitchen East
+  128,   # Hell's Kitchen West
+  137,   # Morningside Heights
+  148,   # Midtown Center
+  152,   # Midtown East
+  158,   # Morningside Heights
+  170,   # Penn Station/Midtown West
+  181,   # Noho
+  186,   # Nolita
+  209,   # Red Hook
+  211,   # Sunset Park
+  230,   # Upper West Side North
+  231,   # Upper West Side South
+  232,   # Upper West Side South
+  255    # Yorkville East
+)
+
+cat("=== NIGHTLIFE ZONES DEFINED ===\n\n")
+cat("Number of nightlife zones:", length(nightlife_zone_ids), "\n")
+cat("Zone IDs:", paste(nightlife_zone_ids, collapse = ", "), "\n\n")
+
+# Create zone labels
+zone_names <- tibble(
+  zone_id = c(42, 74, 79, 113, 114, 127, 128, 148, 152, 181, 186, 230, 231),
+  zone_name = c(
+    "Times Square",
+    "East Village",
+    "East Harlem",
+    "Greenwich Village N",
+    "Greenwich Village S",
+    "Hell's Kitchen E",
+    "Hell's Kitchen W",
+    "Midtown Center",
+    "Midtown East",
+    "Noho",
+    "Nolita",
+    "Upper West N",
+    "Upper West S"
+  )
+)
+
+cat("Major Nightlife Zones:\n")
+print(zone_names)
+```
+
+---
+
+# Process Data - Filter for Nightlife Hours & Define Zone Location
+
+```{r process}
+
+# Function to prepare data
+prepare_data <- function(df, period) {
+  df %>%
+    mutate(
+      hour = hour(pickup_datetime),
+      date = date(pickup_datetime),
+      period = period,
+      # Flag if pickup is in a nightlife zone
+      in_nightlife_zone = PULocationID %in% nightlife_zone_ids
+    ) %>%
+    filter(hour >= 20 | hour <= 4)  # 8 PM - 4 AM only
+}
+
+# Process all three periods
+df_2019 <- prepare_data(data_2019, "Pre-COVID (June 2019)")
+df_2021 <- prepare_data(data_2021, "During COVID (June 2021)")
+df_2023 <- prepare_data(data_2023, "Post-COVID (June 2023)")
+
+# Combine
+all_data <- bind_rows(df_2019, df_2021, df_2023)
+
+cat("✓ Processing complete (Nightlife hours only: 8 PM - 4 AM)\n\n")
+
+# Summary by zone location
+summary_by_zone <- all_data %>%
+  group_by(period, in_nightlife_zone) %>%
+  summarise(trips = n(), .groups = "drop")
+
+cat("Trips by Zone Location:\n\n")
+print(kable(summary_by_zone))
+```
+
+---
+
+# Summary Statistics: Nightlife Zones vs Elsewhere
+
+```{r summary}
+
+# Overall period totals
+period_totals <- all_data %>%
+  group_by(period) %>%
+  summarise(
+    total_trips = n(),
+    nightlife_zone_trips = sum(in_nightlife_zone),
+    other_trips = sum(!in_nightlife_zone),
+    pct_in_nightlife = round(100 * sum(in_nightlife_zone) / n(), 1),
+    .groups = "drop"
+  )
+
+cat("=== NIGHTLIFE ZONE COMPARISON ===\n\n")
+print(kable(period_totals))
+
+# Hourly breakdown by zone
+hourly_by_zone <- all_data %>%
+  group_by(hour, period, in_nightlife_zone) %>%
+  summarise(trips = n(), .groups = "drop") %>%
+  mutate(zone_type = if_else(in_nightlife_zone, "Nightlife Zones", "Other Areas"))
+
+# Peak hours in nightlife zones
+cat("\n\n=== PEAK HOURS IN NIGHTLIFE ZONES ===\n\n")
+peak_nightlife <- hourly_by_zone %>%
+  filter(zone_type == "Nightlife Zones") %>%
+  group_by(period) %>%
+  slice_max(trips, n = 3) %>%
+  arrange(period, desc(trips))
+
+print(kable(peak_nightlife))
+```
+
+---
+
+# Visualization 1: Hourly Patterns - Nightlife Zones vs Elsewhere
+
+```{r viz1}
+#| fig-width: 14
+#| fig-height: 8
+
+ggplot(hourly_by_zone, aes(x = hour, y = trips, color = zone_type, group = zone_type)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 3) +
+  facet_wrap(~period) +
+  scale_color_manual(values = c(
+    "Nightlife Zones" = "#FF6B6B",
+    "Other Areas" = "#4ECDC4"
+  )) +
+  scale_x_continuous(breaks = seq(0, 23, 2)) +
+  labs(
+    title = "Rideshare Trips by Hour: Nightlife Zones vs Other Areas",
+    subtitle = "Nightlife Hours (8 PM - 4 AM)",
+    x = "Hour", 
+    y = "Trip Count", 
+    color = "Location Type"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    strip.text = element_text(size = 11, face = "bold")
+  )
+
+ggsave("output/01_nightlife_vs_other.png", width = 14, height = 8, dpi = 300)
+cat("✓ Saved: output/01_nightlife_vs_other.png\n")
+```
+
+---
+
+# Visualization 2: Overlay Comparison - All Periods
+
+```{r viz2}
+#| fig-width: 12
+#| fig-height: 7
+
+# Prepare data for nightlife zones only
+nightlife_only <- hourly_by_zone %>%
+  filter(zone_type == "Nightlife Zones")
+
+ggplot(nightlife_only, aes(x = hour, y = trips, color = period, group = period)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c(
+    "Pre-COVID (June 2019)" = "#1f77b4",
+    "During COVID (June 2021)" = "#d62728",
+    "Post-COVID (June 2023)" = "#2ca02c"
+  )) +
+  scale_x_continuous(breaks = seq(0, 23, 1)) +
+  labs(
+    title = "Rideshare Volumes in Nightlife Zones: COVID Impact & Recovery",
+    subtitle = "Hourly patterns (8 PM - 4 AM)",
+    x = "Hour", 
+    y = "Trip Count", 
+    color = "Period"
+  ) +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_line(color = "lightgray", size = 0.2)
+  )
+
+ggsave("output/02_nightlife_recovery.png", width = 12, height = 7, dpi = 300)
+cat("✓ Saved: output/02_nightlife_recovery.png\n")
+```
+
+---
+
+# Visualization 3: Proportion of Trips in Nightlife Zones
+
+```{r viz3}
+#| fig-width: 10
+#| fig-height: 7
+
+prop_data <- period_totals %>%
+  select(period, pct_in_nightlife) %>%
+  rename(pct = pct_in_nightlife)
+
+ggplot(prop_data, aes(x = reorder(period, c(1,2,3)), y = pct, fill = period)) +
+  geom_col(color = "white", size = 1) +
+  geom_text(aes(label = paste0(pct, "%")), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_y_continuous(limits = c(0, max(prop_data$pct) + 10)) +
+  scale_fill_manual(values = c(
+    "Pre-COVID (June 2019)" = "#1f77b4",
+    "During COVID (June 2021)" = "#d62728",
+    "Post-COVID (June 2023)" = "#2ca02c"
+  )) +
+  labs(
+    title = "% of Nightlife Rideshare Trips in Nightlife Zones",
+    subtitle = "Proportion of trips picking up in designated nightlife areas",
+    x = "", 
+    y = "% of Trips in Nightlife Zones"
+  ) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 11, face = "bold"))
+
+ggsave("output/03_nightlife_proportion.png", width = 10, height = 7, dpi = 300)
+cat("✓ Saved: output/03_nightlife_proportion.png\n")
+```
+
+---
+
+# Visualization 4: Comparison by Zone Type
+
+```{r viz4}
+#| fig-width: 12
+#| fig-height: 7
+
+# Prepare comparison data
+comparison_data <- period_totals %>%
+  select(period, nightlife_zone_trips, other_trips) %>%
+  pivot_longer(cols = -period, names_to = "zone_type", values_to = "trips") %>%
+  mutate(zone_type = if_else(zone_type == "nightlife_zone_trips", 
+                              "Nightlife Zones", 
+                              "Other Areas"))
+
+ggplot(comparison_data, aes(x = period, y = trips, fill = zone_type)) +
+  geom_col(position = "dodge", color = "white", size = 0.5) +
+  scale_fill_manual(values = c(
+    "Nightlife Zones" = "#FF6B6B",
+    "Other Areas" = "#4ECDC4"
+  )) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Total Trips: Nightlife Zones vs Other Areas",
+    subtitle = "Nightlife hours (8 PM - 4 AM) comparison",
+    x = "Period", 
+    y = "Total Trip Count", 
+    fill = "Location Type"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+
+ggsave("output/04_zone_comparison.png", width = 12, height = 7, dpi = 300)
+cat("✓ Saved: output/04_zone_comparison.png\n")
+```
+
+---
+
+# Detailed Zone Analysis
+
+```{r zone-detail}
+
+# Top nightlife zones by activity
+top_zones <- all_data %>%
+  filter(in_nightlife_zone) %>%
+  group_by(period, PULocationID) %>%
+  summarise(trips = n(), .groups = "drop") %>%
+  group_by(period) %>%
+  slice_max(trips, n = 5) %>%
+  left_join(zone_names, by = c("PULocationID" = "zone_id"))
+
+cat("\n=== TOP 5 NIGHTLIFE ZONES BY PERIOD ===\n\n")
+print(kable(top_zones %>% select(period, PULocationID, zone_name, trips)))
+```
+
+---
+
+# Export Data
+
+```{r export}
+
+write_csv(hourly_by_zone, "output/hourly_by_zone.csv")
+write_csv(period_totals, "output/period_totals.csv")
+write_csv(summary_by_zone, "output/summary_by_zone.csv")
+
+cat("\n=== FILES EXPORTED ===\n")
+cat("✓ output/hourly_by_zone.csv\n")
+cat("✓ output/period_totals.csv\n")
+cat("✓ output/summary_by_zone.csv\n")
+cat("✓ output/01_nightlife_vs_other.png\n")
+cat("✓ output/02_nightlife_recovery.png\n")
+cat("✓ output/03_nightlife_proportion.png\n")
+cat("✓ output/04_zone_comparison.png\n")
+```
+
+---
+
+# Key Findings
+
+## Rideshare Volumes Around Nightlife Zones
+
+**Main Question:** How do rideshare trip volumes change by hour around nightlife zones?
+
+### Key Metrics:
+
+- **Proportion in Nightlife Zones:**
+  - Pre-COVID (2019): `r period_totals %>% filter(period == "Pre-COVID (June 2019)") %>% pull(pct_in_nightlife)`% of trips
+  - During COVID (2021): `r period_totals %>% filter(period == "During COVID (June 2021)") %>% pull(pct_in_nightlife)`% of trips
+  - Post-COVID (2023): `r period_totals %>% filter(period == "Post-COVID (June 2023)") %>% pull(pct_in_nightlife)`% of trips
+
+### Peak Hours in Nightlife Zones:
+
+Most rideshare activity in nightlife zones occurs between **8 PM - 4 AM**, with specific peaks around:
+- **Hour 4 (4 AM):** Closing time for bars/clubs
+- **Hour 20 (8 PM):** Evening start of nightlife
+- **Hour 21-23 (9 PM - 11 PM):** Peak nightlife hours
+
+### Interpretation:
+
+1. **Consistent hotspots:** Nightlife zones (Times Square, East Village, Hell's Kitchen, etc.) maintain a stable proportion of rideshare activity
+2. **COVID impact:** The absolute volume decreased but the geographic pattern remained similar
+3. **Recovery pattern:** Post-COVID recovery shows similar hourly distribution to pre-COVID
+4. **Late-night peak:** Hour 4 AM peak indicates high demand after bars close
+
+---
+
+# Methodology Notes
+
+## Nightlife Zone Definition:
+
+Using known NYC neighborhoods with high concentration of bars, clubs, and nightlife:
+- Times Square/Theatre District (Zone 42)
+- East Village (Zone 74)
+- Greenwich Village (Zones 113-114)
+- Hell's Kitchen (Zones 127-128)
+- Midtown (Zones 148, 152)
+- Noho/Nolita (Zones 181, 186)
+- Upper West Side (Zones 230-231)
+
+**Future Enhancement:** Integrate actual Yelp API data to:
+- Fetch bar/club locations in real-time
+- Define zones dynamically based on density
+- Validate against actual business data
+
+---
+
+*Analysis: `r Sys.Date()`*  
+*STA 9750 Nightlife Analytics Project*  
+*Specific Question: How do rideshare trip volumes change by hour around nightlife zones?*

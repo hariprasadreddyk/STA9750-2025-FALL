@@ -1,0 +1,534 @@
+---
+title: "STA 9750: Mini-Project #03"
+subtitle: "Visualizing and Maintaining the Green Canopy of NYC"
+author: "[Your Name]"
+date: today
+date-format: "MMMM D, YYYY"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 10
+    fig-height: 6
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+    echo: true
+---
+
+# Introduction
+
+This mini-project explores NYC's urban tree canopy using geospatial data from NYC's TreeMap and City Council district boundaries. We combine multiple data sources to understand tree distribution patterns across the city and develop a data-driven proposal for a new tree program.
+
+# Data Acquisition
+
+## NYC City Council Districts
+
+We begin by downloading and processing the NYC City Council district boundaries from the NYC Department of Planning.
+
+```{r}
+#| label: setup
+#| code-summary: "Load libraries and set up environment"
+
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(httr2)
+library(DT)
+library(jsonlite)
+
+# Set data directory
+data_dir <- "data/mp03"
+if (!dir.exists(data_dir)) {
+  dir.create(data_dir, recursive = TRUE)
+}
+
+# Install nycgeo if needed
+if (!require("nycgeo", quietly = TRUE)) {
+  message("Installing nycgeo package...")
+  devtools::install_github("mfherman/nycgeo")
+  library(nycgeo)
+}
+```
+
+```{r}
+#| label: download-districts
+#| code-summary: "Load NYC City Council District boundaries from nycgeo"
+
+# Load city council districts from nycgeo package
+# This package already has the boundaries clipped to shoreline
+library(nycgeo)
+
+districts <- council_sf |>
+  st_transform(crs = "WGS84") |>
+  rename(coun_dist = council_dist_id) |>
+  mutate(geometry = st_simplify(geometry, dTolerance = 5))
+
+# Preview
+head(districts)
+```
+
+## NYC Tree Points
+
+Next, we download the NYC TreeMap data from NYC OpenData using the Socrata API via httr2.
+
+```{r}
+#| label: download-trees
+#| code-summary: "Download NYC Tree Points data using httr2 API (GeoJSON + sf)"
+#| cache: true
+
+library(sf)
+library(httr2)
+library(dplyr)
+
+# GeoJSON endpoint for Forestry Tree Points
+tree_base_url <- "https://data.cityofnewyork.us/resource/hn5i-inap.geojson"
+
+download_trees <- function(data_dir   = "data/mp03",
+                           base_url   = tree_base_url,
+                           chunk_size = 10000,
+                           max_chunks = 50) {
+
+  tree_dir <- file.path(data_dir, "tree_points")
+  if (!dir.exists(tree_dir)) {
+    dir.create(tree_dir, recursive = TRUE)
+  }
+
+  all_chunks <- list()
+  chunk_id   <- 1
+
+  repeat {
+    offset  <- (chunk_id - 1) * chunk_size
+    f_path  <- file.path(tree_dir, sprintf("trees_%05d.geojson", chunk_id))
+
+    if (!file.exists(f_path)) {
+      message("Downloading chunk ", chunk_id,
+              " (offset = ", offset, ", limit = ", chunk_size, ")")
+
+      resp <- request(base_url) |>
+        req_url_query(
+          `$limit`  = chunk_size,
+          `$offset` = offset
+        ) |>
+        req_perform()
+
+      if (resp_status(resp) != 200) {
+        stop("API request failed with status ", resp_status(resp))
+      }
+
+      # Save raw GeoJSON bytes
+      writeBin(resp_body_raw(resp), f_path)
+    } else {
+      message("Using cached file: ", basename(f_path))
+    }
+
+    # Read GeoJSON as sf
+    this_sf <- st_read(f_path, quiet = TRUE)
+
+    # 🔧 Force planteddate to a consistent type across chunks
+    if ("planteddate" %in% names(this_sf)) {
+      this_sf <- this_sf |>
+        mutate(planteddate = as.character(planteddate))
+    }
+
+    n_rows  <- nrow(this_sf)
+    message("  -> ", n_rows, " rows in this chunk")
+
+    # If this chunk is empty, delete and stop
+    if (n_rows == 0) {
+      file.remove(f_path)
+      break
+    }
+
+    all_chunks[[chunk_id]] <- this_sf
+
+    # Stop when last chunk is not "full"
+    if (n_rows < chunk_size) break
+
+    chunk_id <- chunk_id + 1
+    if (chunk_id > max_chunks) {
+      warning("Reached max_chunks; stopping early.")
+      break
+    }
+  }
+
+  # Combine all chunks
+  tree_sf <- bind_rows(all_chunks)
+
+  message("Total rows combined: ", nrow(tree_sf))
+  tree_sf
+}
+
+# While developing, keep chunk_size small
+trees <- download_trees(data_dir = data_dir, chunk_size = 10000)
+
+head(trees)
+```
+
+# Initial Exploration
+
+## Mapping NYC Trees
+
+Here we create a comprehensive map showing all trees overlaid on council district boundaries.
+
+```{r}
+#| label: map-all-trees
+#| code-summary: "Create map of all NYC trees by district"
+#| fig-cap: "Distribution of trees across NYC City Council districts"
+
+# Create the map
+ggplot() +
+  geom_sf(
+    data = districts,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  geom_sf(
+    data = trees,
+    aes(color = "Tree"),
+    size = 1,
+    alpha = 0.3
+  ) +
+  scale_color_manual(values = c("Tree" = "#2d5016")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  ) +
+  labs(
+    title = "Tree Distribution Across NYC",
+    subtitle = "All trees in NYC by City Council district",
+    color = ""
+  )
+```
+
+## District-Level Analysis
+
+Now we perform a spatial join to analyze trees by district.
+
+```{r}
+#| label: spatial-join
+#| code-summary: "Join trees to council districts"
+
+# Spatial join - trees to districts
+trees_by_district <- st_join(trees, districts, join = st_intersects)
+
+# Preview
+head(trees_by_district)
+```
+
+### Question 1: Most Trees by District
+
+Which council district has the most trees?
+
+```{r}
+#| label: q1-most-trees
+#| code-summary: "District with most trees"
+
+most_trees_district <- trees_by_district |>
+  st_drop_geometry() |>
+  group_by(District = coun_dist) |>
+  summarise(
+    `Total Trees` = n(),
+    .groups = "drop"
+  ) |>
+  arrange(desc(`Total Trees`)) |>
+  slice_head(n = 10)
+
+datatable(
+  most_trees_district,
+  caption = "Top 10 Districts by Number of Trees",
+  options = list(
+    pageLength = 10,
+    searching = FALSE,
+    lengthChange = FALSE
+  ),
+  rownames = FALSE
+)
+```
+
+### Question 2: Tree Density by District
+
+Which council district has the highest density of trees?
+
+```{r}
+#| label: q2-tree-density
+#| code-summary: "Tree density by district"
+
+# Compute district areas (in square meters) directly from geometry
+district_areas <- districts |>
+  mutate(
+    area_m2 = as.numeric(st_area(geometry))
+  ) |>
+  st_drop_geometry() |>
+  select(coun_dist, area_m2)
+
+# Get district tree counts and join areas
+tree_density <- trees_by_district |>
+  st_drop_geometry() |>
+  group_by(District = coun_dist) |>
+  summarise(
+    `Total Trees` = n(),
+    .groups = "drop"
+  ) |>
+  left_join(
+    district_areas |>
+      rename(District = coun_dist),
+    by = "District"
+  ) |>
+  mutate(
+    `Area (sq miles)` = area_m2 * 0.000000386102,  # m² → square miles
+    `Tree Density (trees/sq mi)` = `Total Trees` / `Area (sq miles)`
+  ) |>
+  arrange(desc(`Tree Density (trees/sq mi)`)) |>
+  slice_head(n = 10)
+
+datatable(
+  tree_density |>
+    select(District, `Total Trees`, `Area (sq miles)`, `Tree Density (trees/sq mi)`),
+  caption = "Top 10 Districts by Tree Density",
+  options = list(
+    pageLength = 10,
+    searching = FALSE,
+    lengthChange = FALSE
+  ),
+  rownames = FALSE
+) |>
+  DT::formatRound(c("Area (sq miles)", "Tree Density (trees/sq mi)"), digits = 2)
+```
+
+### Question 3: Dead Trees by District
+
+Which district has the highest fraction of dead trees?
+
+```{r}
+#| label: q3-dead-trees
+#| code-summary: "Fraction of dead trees by district"
+
+# Analyze tree condition
+dead_trees <- trees_by_district |>
+  st_drop_geometry() |>
+  group_by(District = coun_dist) |>
+  summarise(
+    `Total Trees` = n(),
+    `Dead Trees` = sum(tpcondition == "Dead", na.rm = TRUE),
+    `Dead Fraction` = `Dead Trees` / `Total Trees`,
+    .groups = "drop"
+  ) |>
+  filter(`Total Trees` >= 50) |>  # Only districts with at least 50 trees
+  arrange(desc(`Dead Fraction`)) |>
+  slice_head(n = 10)
+
+datatable(
+  dead_trees |>
+    mutate(`Dead Fraction` = scales::percent(`Dead Fraction`, 0.1)),
+  caption = "Top 10 Districts by Fraction of Dead Trees (min 50 trees)",
+  options = list(
+    pageLength = 10,
+    searching = FALSE,
+    lengthChange = FALSE
+  ),
+  rownames = FALSE
+)
+```
+
+### Question 4: Most Common Tree Species in Manhattan
+
+```{r}
+#| label: q4-manhattan-species
+#| code-summary: "Most common tree species in Manhattan"
+
+# Create borough mapping
+borough_mapping <- trees_by_district |>
+  mutate(
+    Borough = case_when(
+      coun_dist %in% 1:10 ~ "Manhattan",
+      coun_dist %in% 11:18 ~ "Bronx",
+      coun_dist %in% 19:32 ~ "Queens",
+      coun_dist %in% 33:51 ~ "Brooklyn",
+      TRUE ~ "Staten Island"
+    )
+  )
+
+manhattan_species <- borough_mapping |>
+  st_drop_geometry() |>
+  filter(Borough == "Manhattan") |>
+  group_by(Species = genusspecies) |>
+  summarise(
+    Count = n(),
+    .groups = "drop"
+  ) |>
+  arrange(desc(Count)) |>
+  slice_head(n = 10)
+
+datatable(
+  manhattan_species,
+  caption = "Top 10 Tree Species in Manhattan",
+  options = list(
+    pageLength = 10,
+    searching = FALSE,
+    lengthChange = FALSE
+  ),
+  rownames = FALSE
+)
+```
+
+### Question 5: Closest Tree to Baruch Campus
+
+```{r}
+#| label: q5-closest-tree
+#| code-summary: "Tree closest to Baruch College campus"
+
+# Baruch College coordinates (55 Lexington Ave, New York, NY)
+baruch_point <- st_sfc(
+  st_point(c(-73.9851, 40.7353)),
+  crs = "WGS84"
+)
+
+# Calculate distances from each tree to Baruch
+trees_with_distance <- trees |>
+  mutate(
+    distance_meters = as.numeric(st_distance(geometry, baruch_point))
+  ) |>
+  arrange(distance_meters) |>
+  slice_head(n = 1)
+
+# Extract info (no Diameter, since tree_dbh isn't in this dataset)
+closest_tree <- trees_with_distance |>
+  st_drop_geometry() |>
+  select(
+    Species       = genusspecies,
+    Condition     = tpcondition,
+    `Distance (m)` = distance_meters
+  )
+
+datatable(
+  closest_tree,
+  caption = "Tree Closest to Baruch College Campus",
+  options = list(
+    searching    = FALSE,
+    lengthChange = FALSE,
+    paging       = FALSE
+  ),
+  rownames = FALSE
+)
+```
+
+# Government Project Proposal
+
+## [Choose Your District]
+
+*Proposal for a new tree program in [District Name]*
+
+### Project Description
+
+[Write 2-3 sentences describing your proposed tree program. Focus on the general concept without requiring data justification here.]
+
+### Project Scope
+
+[Specify the scope: X trees to be maintained/replaced, Y new plantings, Z stumps removed, etc.]
+
+### Zoomed Map of District
+
+[Create a map showing just your chosen district with relevant trees highlighted]
+
+```{r}
+#| label: district-map
+#| code-summary: "Map of proposed district"
+#| eval: false
+
+# Example code structure - modify for your chosen district
+chosen_district <- 3  # Change this to your chosen district
+
+district_boundary <- districts |>
+  filter(coun_dist == chosen_district)
+
+trees_in_district <- trees_by_district |>
+  filter(coun_dist == chosen_district)
+
+ggplot() +
+  geom_sf(data = district_boundary, fill = NA, color = "black", linewidth = 1) +
+  geom_sf(
+    data = trees_in_district,
+    aes(color = tpcondition),
+    size = 2,
+    alpha = 0.6
+  ) +
+  scale_color_viridis_d() +
+  theme_minimal() +
+  labs(
+    title = paste("Trees in Council District", chosen_district),
+    color = "Tree Condition"
+  )
+```
+
+### Quantitative Comparison
+
+Compare your chosen district to at least 3 others on relevant metrics.
+
+```{r}
+#| label: district-comparison
+#| code-summary: "Compare your district to others"
+#| eval: false
+
+# Example comparison structure
+comparison <- trees_by_district |>
+  st_drop_geometry() |>
+  group_by(District = coun_dist) |>
+  summarise(
+    `Total Trees` = n(),
+    `Dead Trees` = sum(tpcondition == "Dead", na.rm = TRUE),
+    `Dead %` = 100 * mean(tpcondition == "Dead", na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(District %in% c(3, 5, 7, 9)) |>  # Example districts
+  arrange(desc(`Dead %`))
+
+datatable(comparison, rownames = FALSE)
+```
+
+### Supporting Visualization
+
+[Create a bar chart, violin plot, or other visualization supporting your quantitative comparison]
+
+```{r}
+#| label: comparison-viz
+#| code-summary: "Visualization of district comparison"
+#| eval: false
+
+# Example: Bar chart comparing metric across districts
+# Modify for your chosen comparison
+```
+
+### Additional District Comparison
+
+[Create either a map-based comparison of your district with at least one other, or a non-map visualization about your proposed project scope]
+
+```{r}
+#| label: additional-comparison
+#| code-summary: "Additional district comparison"
+#| eval: false
+
+# Example: Side-by-side maps or comparative visualization
+```
+
+# Summary
+
+[Write a brief conclusion (2-3 sentences) summarizing your proposal and key findings]
+
+---
+
+**Word count of proposal section:** [estimate]
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
