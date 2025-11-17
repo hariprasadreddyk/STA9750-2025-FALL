@@ -564,7 +564,7 @@ datatable(
 )
 ```
 
-# Government Project Proposal 
+# Government Project Proposal
 
 ## Dead Tree Replacement Initiative: District 2
 
