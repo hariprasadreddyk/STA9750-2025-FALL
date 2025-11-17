@@ -2,7 +2,7 @@
 title: "Visualizing and Maintaining the Green Canopy of NYC"
 subtitle: "A Data-Driven Analysis of NYC's Urban Forest and Tree Canopy Management Proposal"
 author: "Hariprasad Reddy Kotakondla"
-date: today
+date: today 
 date-format: "MMMM D, YYYY"
 format:
   html:
