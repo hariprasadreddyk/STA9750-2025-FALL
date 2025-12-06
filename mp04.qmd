@@ -410,7 +410,7 @@ September has the largest average absolute revision (~`r format(max_month$avg_ab
 ## Question 6: How large is the average CES revision?
 
 ```{r q6-analysis}
-#| code-summary: "Overall summary statistics for revisions"
+#| code-summary: "Overall summary statistics for revisions" 
 
 tibble(
   Statistic = c("Mean Revision", "Median Revision", "Mean Abs Revision", "Median Abs Revision", "Std Dev"),
