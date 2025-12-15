@@ -63,7 +63,7 @@ options(scipen = 999)
 
 # Helper function to reorder hours starting from 5 AM (natural day cycle)
 reorder_hours_5am <- function(hour) {
-  (hour - 5) %% 24
+  (hour - 5) %% 24 
 }
 
 # Helper function to create hour labels starting from 5 AM
