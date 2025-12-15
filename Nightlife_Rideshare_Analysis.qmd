@@ -1,0 +1,967 @@
+---
+title: "Nightlife Economic Impact: Temporal Analysis"
+subtitle: "How Rideshare Trips Change by Hour Around NYC Nightlife Zones"
+author: "Hariprasad Reddy Kotakondla"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show Code"
+    theme: cosmo
+    smooth-scroll: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| include: false
+
+# =============================================================================
+# PACKAGE LOADING AND CONFIGURATION
+# =============================================================================
+
+library(tidyverse)
+library(arrow)
+library(sf)
+library(lubridate)
+library(ggplot2)
+library(knitr)
+library(scales)
+library(httr)
+library(jsonlite)
+library(viridis)
+library(DBI)
+library(duckdb)
+library(glue)
+library(progress)
+library(leaflet)
+library(htmlwidgets)
+
+# Define consistent color palette for all visualizations
+colors <- list(
+  nightlife = "#FF6B6B",
+  other = "#4ECDC4",
+  night = "#2C3E50",
+  day = "#F39C12",
+  gray = "#CCCCCC"
+)
+
+# Set global ggplot theme for professional, consistent styling
+theme_set(theme_minimal(base_size = 12) + 
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "gray40"),
+    legend.position = "top"
+  ))
+
+# Disable scientific notation for cleaner output
+options(scipen = 999)
+
+# Helper function to reorder hours starting from 5 AM (natural day cycle)
+reorder_hours_5am <- function(hour) {
+  (hour - 5) %% 24
+}
+
+# Helper function to create hour labels starting from 5 AM
+hour_labels_5am <- function(x) {
+  actual_hour <- (x + 5) %% 24
+  paste0(actual_hour, ":00")
+}
+```
+
+# Executive Summary
+
+This analysis examines **684 million rideshare trips** across 36 months (January 2022–December 2024) to understand how nightlife zones reshape NYC's transportation patterns. By linking NYC TLC trip data with **2,058 Yelp-identified nightlife venues**, I reveal that nightlife zones—representing only **26.6% of taxi zones**—capture **51% of all trips** and **53.9% of total revenue**. During nighttime hours (8 PM–4 AM), this concentration intensifies to **61.1% of citywide revenue**. The surge index peaks at 2 AM, when nightlife zones capture **24% more trips** than their daily average, demonstrating that nightlife fundamentally reshapes *when* and *where* the city moves.
+
+---
+
+# Introduction
+
+## Project Context
+
+This individual report is part of the **Nightlife Analytics: The Economics of Cities After Dark** group project for STA 9750. Our team examines how nightlife activity impacts New York City across multiple dimensions.
+
+**Overarching Question (OQ):** *How does nightlife activity—bars, entertainment, and rideshares—drive NYC economies and affect city safety and life quality?*
+
+**My Specific Question (SQ):** *How do rideshare trip volumes change by hour in nightlife zones compared to the rest of NYC?*
+
+This analysis directly supports the OQ by quantifying the temporal dynamics of nightlife-driven transportation demand. Understanding when and where nightlife generates rideshare activity reveals the economic footprint of after-dark entertainment and informs transportation planning, driver positioning strategies, and urban policy decisions.
+
+## Key Innovation
+
+Unlike traditional analyses that simply compare daytime versus nighttime patterns, this study introduces a **surge index** that quantifies *relative* nightlife dominance across each hour of the day. By measuring how much nightlife zones exceed their average trip share at different times, the surge index reveals the precise hours when nightlife districts become transportation hotspots—providing actionable insights for drivers, planners, and policymakers.
+
+## Why This Matters
+
+Nightlife districts are economic engines generating jobs, tax revenue, and urban vitality. Understanding the relationship between nightlife density and rideshare patterns is essential for:
+
+1. **Transportation Planning:** Optimizing service allocation during peak nightlife hours
+2. **Driver Strategy:** Identifying high-revenue positioning opportunities
+3. **Economic Policy:** Quantifying nightlife's contribution to the transportation economy
+4. **Urban Planning:** Informing infrastructure investments in entertainment districts
+
+## Methodology Overview
+
+This analysis combines two primary data sources:
+
+1. **NYC TLC HVFHV Trip Records:** High-volume for-hire vehicle (Uber/Lyft) trip data from January 2022 through December 2024, encompassing over 684 million individual trips.
+
+2. **Yelp Fusion API:** Venue data for nightlife establishments (bars, lounges, dance clubs, music venues, cocktail bars) across NYC neighborhoods.
+
+**Nightlife Zone Definition:** A taxi zone qualifies as a "nightlife zone" if it contains **≥5 nightlife venues**. This threshold identifies zones with meaningful nightlife concentration while remaining robust to venue data incompleteness.
+
+**Nightlife Hours Definition:** 8 PM to 4 AM, capturing the core window of evening entertainment activity.
+
+---
+
+# Part 1: Data Acquisition
+
+## NYC TLC Trip Data
+
+The NYC Taxi and Limousine Commission publishes monthly parquet files containing all high-volume for-hire vehicle trips. The following code downloads these files programmatically:
+
+```{r download-tlc-data}
+#| eval: false
+
+# =============================================================================
+# TLC DATA DOWNLOAD
+# Programmatically download HVFHV parquet files from NYC TLC
+# =============================================================================
+
+# Create data directory structure
+data_path <- "data/Nightlife_Rideshare_Analysis"
+dir.create(data_path, showWarnings = FALSE, recursive = TRUE)
+
+# Define date range for analysis
+years <- 2022:2024
+months <- sprintf("%02d", 1:12)
+
+# Base URL for TLC data
+base_url <- "https://d37ci6vzurychx.cloudfront.net/trip-data"
+
+# Download each monthly file
+for (year in years) {
+  for (month in months) {
+    file_name <- paste0("fhvhv_tripdata_", year, "-", month, ".parquet")
+    file_url <- paste(base_url, file_name, sep = "/")
+    dest_file <- file.path(data_path, file_name)
+    
+    # Only download if file doesn't exist
+    if (!file.exists(dest_file)) {
+      message("Downloading: ", file_name)
+      tryCatch({
+        download.file(file_url, dest_file, mode = "wb", quiet = TRUE)
+      }, error = function(e) {
+        message("Failed to download: ", file_name)
+      })
+    }
+  }
+}
+
+message("TLC data download complete.")
+```
+
+## Yelp API Venue Data
+
+Nightlife venues were identified using the Yelp Fusion API. The following code queries the API across multiple NYC neighborhoods and nightlife categories:
+
+```{r fetch-yelp-data}
+#| eval: false
+
+# =============================================================================
+# YELP API DATA COLLECTION
+# Fetch nightlife venue data from Yelp Fusion API
+# =============================================================================
+
+fetch_yelp_venues <- function(api_key) {
+  if (api_key == "" || is.null(api_key)) {
+    stop("Yelp API key not found. Set YELP_API_KEY environment variable.")
+  }
+  
+  base_url <- "https://api.yelp.com/v3/businesses/search"
+  all_venues <- tibble()
+  
+  # Target neighborhoods with known nightlife activity
+  neighborhoods <- c(
+    "East Village, NY", "West Village, NY", "Lower East Side, NY",
+    "Williamsburg, Brooklyn", "Midtown Manhattan, NY", "Hell's Kitchen, NY",
+    "Astoria, Queens", "Park Slope, Brooklyn", "SoHo, NY", "Bushwick, Brooklyn"
+  )
+  
+  # Nightlife-specific Yelp categories
+  categories <- c("bars", "lounges", "danceclubs", "musicvenues", "cocktailbars")
+  
+  for (hood in neighborhoods) {
+    for (cat in categories) {
+      for (offset in seq(0, 50, by = 50)) {
+        tryCatch({
+          response <- GET(
+            base_url,
+            add_headers(Authorization = paste("Bearer", api_key)),
+            query = list(
+              location = hood,
+              categories = cat,
+              limit = 50,
+              offset = offset
+            ),
+            timeout(30)
+          )
+          
+          if (status_code(response) != 200) break
+          
+          data <- content(response, as = "parsed")
+          if (length(data$businesses) == 0) break
+          
+          venues <- tibble(
+            id = map_chr(data$businesses, ~.x$id),
+            name = map_chr(data$businesses, ~.x$name),
+            latitude = map_dbl(data$businesses, ~.x$coordinates$latitude),
+            longitude = map_dbl(data$businesses, ~.x$coordinates$longitude),
+            rating = map_dbl(data$businesses, ~.x$rating),
+            review_count = map_int(data$businesses, ~.x$review_count),
+            categories = map_chr(data$businesses, 
+                                 ~paste(map_chr(.x$categories, ~.x$title), collapse = ", "))
+          )
+          
+          all_venues <- bind_rows(all_venues, venues)
+          Sys.sleep(0.2)  # Rate limiting
+        }, error = function(e) {
+          message("API error for ", hood, " - ", cat)
+        })
+      }
+    }
+  }
+  
+  return(all_venues %>% distinct(id, .keep_all = TRUE))
+}
+
+# Fetch venues using API key from environment variable
+YELP_API_KEY <- Sys.getenv("YELP_API_KEY")
+nightlife_venues <- fetch_yelp_venues(YELP_API_KEY)
+
+# Cache results for reproducibility
+write_csv(nightlife_venues, "nightlife_venues_cached.csv")
+```
+
+```{r load-cached-venues}
+#| include: false
+
+# Load cached venue data (created by the above code)
+CACHE_FILE <- "nightlife_venues_cached.csv"
+
+if (file.exists(CACHE_FILE)) {
+  nightlife_venues <- read_csv(CACHE_FILE, show_col_types = FALSE) %>%
+    mutate(
+      rating = as.numeric(rating),
+      review_count = as.integer(review_count),
+      latitude = as.numeric(latitude),
+      longitude = as.numeric(longitude)
+    )
+} else {
+  stop("Venue cache file not found. Run the Yelp API fetch code first.")
+}
+
+n_venues_raw <- nrow(nightlife_venues)
+```
+
+## NYC Taxi Zone Boundaries
+
+Taxi zone shapefiles are downloaded from NYC Open Data:
+
+```{r download-taxi-zones}
+#| eval: false
+
+# Download taxi zone shapefile from NYC Open Data
+taxi_zone_url <- "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip"
+download.file(taxi_zone_url, "taxi_zones.zip", mode = "wb")
+unzip("taxi_zones.zip", exdir = ".")
+```
+
+---
+
+# Part 2: Data Quality Assessment
+
+## Sampling Quality
+
+**TLC Data:** The NYC TLC dataset is *comprehensive*, containing every recorded HVFHV trip in the city. There are no sampling concerns—this is population data, not a sample. However, trips that were cancelled, not recorded due to technical issues, or occurred in unlicensed vehicles are not captured.
+
+**Yelp Data:** The Yelp dataset represents venues with active Yelp business profiles. This introduces potential *undercoverage* for:
+
+- Establishments that don't maintain Yelp profiles
+- Newly opened venues not yet indexed
+- Cash-only or informal establishments less likely to appear online
+
+Despite these limitations, Yelp provides the most comprehensive publicly-available database of nightlife venues with precise geocoding.
+
+## Recording Quality
+
+**TLC Data Quality Checks:**
+
+- Trip records include pickup/dropoff times, locations (taxi zone IDs), and fare components
+- Base passenger fare is computed as the sum of base fare, tolls, fees, and surcharges
+- Tips data is incomplete for cash payments (a known limitation)
+- Location IDs are standardized to NYC taxi zone boundaries
+
+**Yelp Data Quality Checks:**
+
+- All venues have valid coordinates (required for API response)
+- 16 venues fell outside NYC taxi zone boundaries and were excluded
+- Rating and review counts provide quality signals but were not used for filtering
+
+```{r spatial-join}
+#| include: false
+
+# =============================================================================
+# SPATIAL JOIN: Assign venues to taxi zones
+# =============================================================================
+
+# Load taxi zone shapefile
+taxi_zones_sf <- st_read("taxi_zones.shp", quiet = TRUE)
+zone_lookup <- read_csv("taxi_zone_lookup.csv", show_col_types = FALSE)
+
+taxi_zones_sf <- taxi_zones_sf %>%
+  left_join(zone_lookup, by = c("LocationID" = "LocationID"))
+
+total_zones <- nrow(taxi_zones_sf)
+
+# Convert venues to spatial object and join to zones
+nightlife_venues_sf <- nightlife_venues %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(st_crs(taxi_zones_sf))
+
+venues_in_zones <- st_join(nightlife_venues_sf, taxi_zones_sf, join = st_within) %>%
+  filter(!is.na(LocationID))
+
+n_venues <- nrow(venues_in_zones)
+n_venues_outside <- n_venues_raw - n_venues
+
+# Aggregate venues per zone
+venues_per_zone <- venues_in_zones %>%
+  st_drop_geometry() %>%
+  group_by(LocationID, Borough, Zone) %>%
+  summarise(n_venues = n(), avg_rating = round(mean(rating, na.rm = TRUE), 2), .groups = "drop")
+
+# Classify nightlife zones (threshold: 5+ venues)
+nightlife_zones_df <- venues_per_zone %>%
+  filter(n_venues >= 5) %>%
+  mutate(LocationID = as.integer(LocationID))
+
+n_nightlife_zones <- nrow(nightlife_zones_df)
+n_no_nightlife <- total_zones - nrow(venues_per_zone)
+pct_nightlife <- round(100 * n_nightlife_zones / total_zones, 1)
+
+# Add zone classification to spatial data
+taxi_zones_sf <- taxi_zones_sf %>%
+  left_join(venues_per_zone %>% select(LocationID, n_venues), by = "LocationID") %>%
+  mutate(
+    n_venues = replace_na(n_venues, 0),
+    zone_type = case_when(
+      n_venues >= 5 ~ "Nightlife (≥5 venues)",
+      TRUE ~ "Other (<5 venues)"
+    ),
+    zone_type = factor(zone_type, levels = c("Nightlife (≥5 venues)", "Other (<5 venues)"))
+  )
+```
+
+We identified **`r format(n_venues, big.mark = ",")` nightlife venues** across NYC taxi zones (`r n_venues_outside` venues excluded as they fall outside taxi zone boundaries). After spatial joining, **`r n_nightlife_zones` zones** (`r pct_nightlife`%) qualify as nightlife zones.
+
+---
+
+# Part 3: Where is Nightlife?
+
+## Chart 1: Zone Coverage
+
+```{r chart-zone-coverage}
+#| fig-width: 10
+#| fig-height: 6
+
+# Compute zone classification counts
+zone_counts <- taxi_zones_sf %>%
+  st_drop_geometry() %>%
+  count(zone_type, name = "Count") %>%
+  mutate(
+    zone_type = factor(zone_type, levels = c("Nightlife (≥5 venues)", "Other (<5 venues)")),
+    pct = round(100 * Count / total_zones, 1)
+  )
+
+ggplot(zone_counts, aes(x = zone_type, y = Count, fill = zone_type)) +
+  geom_col(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = Count), vjust = -0.3, fontface = "bold", size = 4) +
+  geom_text(aes(label = paste0("(", pct, "%)")), vjust = 1.2, color = "white", 
+            fontface = "bold", size = 3.5) +
+  scale_fill_manual(
+    values = c("Nightlife (≥5 venues)" = colors$nightlife, "Other (<5 venues)" = colors$gray),
+    guide = "none"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(
+    title = "NYC Taxi Zone Classification by Nightlife Concentration",
+    subtitle = paste0("Nightlife zones (≥5 venues): ", n_nightlife_zones, 
+                      " • Other (<5 venues): ", total_zones - n_nightlife_zones),
+    x = "", y = "Number of Zones"
+  )
+```
+
+Although nightlife zones make up only `r pct_nightlife`% of NYC taxi zones, their share of trips and revenue is far larger, as we will demonstrate. This establishes that nightlife activity is spatially concentrated but economically influential.
+
+## Chart 2: Interactive Nightlife Zone Map
+
+```{r chart-venue-map}
+#| fig-width: 10
+#| fig-height: 7
+
+# Transform to WGS84 for Leaflet
+nightlife_leaflet <- taxi_zones_sf %>%
+  st_transform(4326) %>%
+  mutate(
+    is_nightlife = n_venues >= 5,
+    popup_text = paste0(
+      "<strong>", Zone, "</strong><br>",
+      "Borough: ", Borough, "<br>",
+      "Venues: ", n_venues, "<br>",
+      ifelse(n_venues >= 5, 
+             "<span style='color: #FF6B6B;'>✓ Nightlife Zone</span>",
+             "<span style='color: gray;'>Not a nightlife zone</span>")
+    )
+  )
+
+# Color palette for nightlife intensity
+pal <- colorNumeric(
+  palette = c("#FFCCBC", "#FF6B6B", "#C0392B", "#6A1B1B"),
+  domain = c(5, max(nightlife_leaflet$n_venues[nightlife_leaflet$n_venues >= 5])),
+  na.color = "#E8E8E8"
+)
+
+# Build interactive map
+leaflet(nightlife_leaflet, height = 500) %>%
+  addProviderTiles(providers$CartoDB.DarkMatter, 
+                   options = providerTileOptions(opacity = 0.8)) %>%
+  addPolygons(
+    data = nightlife_leaflet %>% filter(!is_nightlife),
+    fillColor = "#404040", fillOpacity = 0.3,
+    color = "#606060", weight = 0.5,
+    popup = ~popup_text,
+    highlightOptions = highlightOptions(weight = 2, color = "#FFFFFF", fillOpacity = 0.5)
+  ) %>%
+  addPolygons(
+    data = nightlife_leaflet %>% filter(is_nightlife),
+    fillColor = ~pal(n_venues), fillOpacity = 0.7,
+    color = "#FFFFFF", weight = 1,
+    popup = ~popup_text,
+    highlightOptions = highlightOptions(weight = 3, color = "#FFD700", fillOpacity = 0.9)
+  ) %>%
+  addLegend(position = "bottomright", pal = pal,
+            values = nightlife_leaflet$n_venues[nightlife_leaflet$is_nightlife],
+            title = "Nightlife Venues", opacity = 0.8) %>%
+  addControl(
+    html = "<div style='background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 5px;'>
+              <span style='color: #FF6B6B; font-size: 18px; font-weight: bold;'>
+                NYC Nightlife Hotspots
+              </span><br>
+              <span style='color: #CCCCCC; font-size: 12px;'>
+                Click zones for details. 70 zones with 5+ venues highlighted.
+              </span>
+            </div>",
+    position = "topright"
+  ) %>%
+  setView(lng = -73.95, lat = 40.75, zoom = 11)
+```
+
+*Interactive map: Click on any zone to see venue counts and classification. Nightlife venues cluster heavily in Lower Manhattan, East Village, and parts of Brooklyn, forming clear hotspots of nighttime movement.*
+
+---
+
+# Part 4: When Does Nightlife Demand Happen?
+
+```{r load-tlc}
+#| include: false
+
+# =============================================================================
+# LOAD AND AGGREGATE TLC DATA
+# =============================================================================
+
+data_path <- "data/Nightlife_Rideshare_Analysis"
+CACHE_DIR <- "data/aggregated_ym"
+dir.create(CACHE_DIR, showWarnings = FALSE, recursive = TRUE)
+
+raw_files <- list.files(path = data_path, pattern = "fhvhv_tripdata.*\\.parquet$", 
+                        full.names = TRUE)
+
+if (length(raw_files) == 0) {
+  stop("No parquet files found in ", data_path)
+}
+
+month_tags <- gsub(".*fhvhv_tripdata_|\\.parquet$", "", basename(raw_files))
+month_tags <- sort(unique(month_tags))
+
+date_min <- format(as.Date(paste0(month_tags[1], "-01")), "%B %Y")
+date_max <- format(as.Date(paste0(tail(month_tags, 1), "-01")), "%B %Y")
+n_months <- length(month_tags)
+
+# Aggregate each monthly file using DuckDB for performance
+pb <- progress_bar$new(
+  total = length(raw_files),
+  format = " Aggregating TLC files [:bar] :percent (:current/:total)"
+)
+
+for (file in raw_files) {
+  month_tag <- gsub(".*fhvhv_tripdata_|\\.parquet$", "", basename(file))
+  agg_file <- file.path(CACHE_DIR, paste0("agg_ym_", month_tag, ".parquet"))
+  
+  if (file.exists(agg_file)) {
+    pb$tick()
+    next
+  }
+  
+  con <- dbConnect(duckdb(), dbdir = ":memory:")
+  
+  sql <- glue("
+    SELECT
+      CAST(PULocationID AS INTEGER) AS PULocationID,
+      EXTRACT(year FROM pickup_datetime) AS pickup_year,
+      EXTRACT(month FROM pickup_datetime) AS pickup_month,
+      EXTRACT(hour FROM pickup_datetime) AS pickup_hour,
+      EXTRACT(dow FROM pickup_datetime) AS pickup_wday,
+      COUNT(*) AS trips,
+      SUM(base_passenger_fare + tolls + bcf + sales_tax +
+          congestion_surcharge + airport_fee) AS total_fare,
+      SUM(tips) AS tips
+    FROM read_parquet('{normalizePath(file, winslash = '/', mustWork = TRUE)}')
+    GROUP BY 1, 2, 3, 4, 5
+  ")
+  
+  monthly_agg <- dbGetQuery(con, sql)
+  dbDisconnect(con, shutdown = TRUE)
+  
+  write_parquet(monthly_agg, agg_file)
+  pb$tick()
+}
+
+# Load all aggregated files
+agg_files <- list.files(CACHE_DIR, pattern = "^agg_ym_.*\\.parquet$", full.names = TRUE)
+tlc_agg <- map_dfr(agg_files, read_parquet)
+
+# Join with zone classifications
+nightlife_zone_ids <- nightlife_zones_df %>%
+  select(LocationID, n_venues, Zone, Borough) %>%
+  mutate(zone_class = "Nightlife")
+
+tlc_with_time <- tlc_agg %>%
+  mutate(
+    pickup_year = as.integer(pickup_year),
+    pickup_month = as.integer(pickup_month),
+    pickup_hour = as.integer(pickup_hour),
+    pickup_wday = as.integer(pickup_wday),
+    pickup_dow = factor(
+      c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")[pickup_wday + 1],
+      levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    ),
+    is_night = (pickup_hour >= 20 | pickup_hour < 4),
+    hour_reordered = reorder_hours_5am(pickup_hour),
+    month_name = factor(month.abb[pickup_month], levels = month.abb)
+  )
+
+tlc_with_zones <- tlc_with_time %>%
+  left_join(nightlife_zone_ids, by = c("PULocationID" = "LocationID")) %>%
+  mutate(
+    zone_class = replace_na(zone_class, "Other"),
+    n_venues = replace_na(n_venues, 0),
+    is_nightlife_zone = zone_class == "Nightlife"
+  )
+
+# Key metrics
+total_trips <- sum(tlc_with_zones$trips)
+nightlife_zone_trips <- tlc_with_zones %>% filter(zone_class == "Nightlife") %>% 
+  summarise(trips = sum(trips)) %>% pull(trips)
+nightlife_trip_pct <- round(100 * nightlife_zone_trips / total_trips, 1)
+
+total_revenue <- sum(tlc_with_zones$total_fare, na.rm = TRUE)
+nightlife_revenue <- tlc_with_zones %>% filter(zone_class == "Nightlife") %>% 
+  summarise(rev = sum(total_fare, na.rm = TRUE)) %>% pull(rev)
+nightlife_rev_pct <- round(100 * nightlife_revenue / total_revenue, 1)
+```
+
+We analyzed **`r format(total_trips, big.mark = ",")` rideshare trips** spanning `r n_months` months (`r date_min` to `r date_max`). 
+
+**Nightlife zones** (≥5 venues) capture **`r nightlife_trip_pct`% of trips** and **`r nightlife_rev_pct`% of revenue**, despite representing only `r pct_nightlife`% of taxi zones.
+
+## Chart 3: Hourly Trip Volume Comparison
+
+```{r chart-nightlife-vs-other}
+#| fig-width: 12
+#| fig-height: 6
+
+hourly_comparison <- tlc_with_zones %>%
+  mutate(zone_group = if_else(zone_class == "Nightlife", "Nightlife Zones", "Other Zones")) %>%
+  group_by(hour_reordered, zone_group) %>%
+  summarise(trips = sum(trips), .groups = "drop")
+
+ggplot(hourly_comparison, aes(x = hour_reordered, y = trips, fill = zone_group)) +
+  geom_area(alpha = 0.8, position = "identity") +
+  geom_vline(xintercept = c(reorder_hours_5am(4), reorder_hours_5am(20)), 
+             linetype = "dashed", alpha = 0.5) +
+  annotate("rect", xmin = reorder_hours_5am(20), xmax = 23, ymin = 0, ymax = Inf, 
+           alpha = 0.08, fill = colors$nightlife) +
+  annotate("rect", xmin = 0, xmax = reorder_hours_5am(4), ymin = 0, ymax = Inf, 
+           alpha = 0.08, fill = colors$nightlife) +
+  annotate("text", x = reorder_hours_5am(22), y = max(hourly_comparison$trips) * 0.85, 
+           label = "Nightlife\nHours", fontface = "bold", size = 3.5, color = colors$night) +
+  scale_fill_manual(values = c("Nightlife Zones" = colors$nightlife, "Other Zones" = colors$gray)) +
+  scale_x_continuous(breaks = c(0, seq(3, 21, 3), 23), labels = function(x) hour_labels_5am(x)) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Nightlife Zones Sustain Demand Past Midnight",
+    subtitle = "Shaded region = 8 PM – 4 AM | Nightlife demand rises ~5 PM, peaks 8 PM–2 AM, stays dominant until 4 AM",
+    x = "Hour of Day (5 AM start)", y = "Number of Trips", fill = ""
+  )
+```
+
+**This chart directly answers my specific question.** Nightlife zones sustain significantly higher trip volumes during the nighttime window (8 PM–4 AM). While "Other" zones drop sharply after 11 PM, nightlife zones remain the primary drivers of city mobility until closing hours. Nightlife clearly reshapes *when* the city moves.
+
+## Chart 4: Nightlife Surge Index
+
+```{r chart-surge-index}
+#| fig-width: 12
+#| fig-height: 6
+
+surge_data <- tlc_with_zones %>%
+  group_by(pickup_hour) %>%
+  summarise(
+    total_trips = sum(trips),
+    nightlife_trips = sum(trips[zone_class == "Nightlife"]),
+    nightlife_share = nightlife_trips / total_trips,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    surge_index = nightlife_share / mean(nightlife_share),
+    hour_reordered = reorder_hours_5am(pickup_hour)
+  )
+
+peak_hour <- surge_data %>% filter(surge_index == max(surge_index)) %>% pull(pickup_hour)
+peak_surge <- round(max(surge_data$surge_index), 2)
+trough_hour <- surge_data %>% filter(surge_index == min(surge_index)) %>% pull(pickup_hour)
+trough_surge <- round(min(surge_data$surge_index), 2)
+
+ggplot(surge_data, aes(x = hour_reordered, y = surge_index)) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_line(color = colors$nightlife, linewidth = 1.5) +
+  geom_point(aes(color = surge_index), size = 4) +
+  geom_vline(xintercept = c(reorder_hours_5am(4), reorder_hours_5am(20)), 
+             linetype = "dotted", alpha = 0.4) +
+  scale_color_viridis_c(option = "plasma", guide = "none") +
+  scale_x_continuous(breaks = c(0, seq(3, 21, 3), 23), labels = function(x) hour_labels_5am(x)) +
+  scale_y_continuous(breaks = seq(0.6, 1.6, 0.1)) +
+  annotate("text", x = 12, y = 1.02, label = "Average = 1.0", color = "gray50", size = 3.5) +
+  labs(
+    title = "Nightlife Surge Index: When Do These Zones Dominate?",
+    subtitle = paste0("Range: ", trough_surge, " (", trough_hour, ":00) to ", 
+                      peak_surge, " (", peak_hour, ":00)"),
+    x = "Hour of Day (5 AM start)", y = "Surge Index"
+  )
+```
+
+The **surge index** quantifies nightlife zone dominance across the day. It peaks sharply at **`r peak_hour`:00 AM** (surge index = `r peak_surge`), when nightlife zones capture **`r round((peak_surge - 1) * 100)`% more trips** than their daily average share. This confirms that nightlife demand disproportionately drives late-night transportation needs.
+
+---
+
+# Part 5: Revenue Analysis
+
+## Chart 5: Hour × Day Revenue Heatmaps
+
+```{r chart-heatmaps}
+#| fig-width: 14
+#| fig-height: 5
+
+# Nightlife zones heatmap - Monday to Sunday order
+hourly_dow_nightlife <- tlc_with_zones %>%
+  filter(zone_class == "Nightlife") %>%
+  group_by(pickup_hour, pickup_dow) %>%
+  summarise(revenue = sum(total_fare, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    pickup_dow = factor(pickup_dow, levels = c("Monday", "Tuesday", "Wednesday", 
+                                                "Thursday", "Friday", "Saturday", "Sunday")),
+    hour_reordered = reorder_hours_5am(pickup_hour)
+  )
+
+ggplot(hourly_dow_nightlife, aes(x = hour_reordered, y = pickup_dow, fill = revenue)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_viridis_c(option = "plasma", labels = dollar_format(scale = 1e-6, suffix = "M")) +
+  scale_x_continuous(breaks = seq(0, 23, 2), labels = function(x) hour_labels_5am(x), expand = c(0, 0)) +
+  scale_y_discrete(limits = rev)+
+  labs(title = "Nightlife Zones: Hour × Day Revenue Heatmap",
+       subtitle = "Friday & Saturday nights (10 PM – 2 AM) are highest-revenue windows",
+       x = "Hour of Day (5 AM start)", y = "", fill = "Revenue") +
+  theme(panel.grid = element_blank())
+```
+
+```{r chart-heatmap-other}
+#| fig-width: 14
+#| fig-height: 5
+
+# Other zones heatmap - Monday to Sunday order
+hourly_dow_other <- tlc_with_zones %>%
+  filter(zone_class == "Other") %>%
+  group_by(pickup_hour, pickup_dow) %>%
+  summarise(revenue = sum(total_fare, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    pickup_dow = factor(pickup_dow, levels = c("Monday", "Tuesday", "Wednesday", 
+                                                "Thursday", "Friday", "Saturday", "Sunday")),
+    hour_reordered = reorder_hours_5am(pickup_hour)
+  )
+
+ggplot(hourly_dow_other, aes(x = hour_reordered, y = pickup_dow, fill = revenue)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_viridis_c(option = "viridis", labels = dollar_format(scale = 1e-6, suffix = "M")) +
+  scale_x_continuous(breaks = seq(0, 23, 2), labels = function(x) hour_labels_5am(x), expand = c(0, 0)) +
+  scale_y_discrete(limits = rev)+
+  labs(title = "Other Zones: Hour × Day Revenue Heatmap",
+       subtitle = "Peaks during daytime rush hours; drops sharply after midnight",
+       x = "Hour of Day (5 AM start)", y = "", fill = "Revenue") +
+  theme(panel.grid = element_blank())
+```
+
+The contrast is striking: nightlife zones generate their highest revenue between 10 PM and 2 AM, while non-nightlife zones peak during traditional commuter hours (7–10 AM and 4–7 PM). This directly demonstrates that time-of-day usage differs dramatically across zone types.
+
+## Chart 6: Revenue Distribution by Zone Type and Time
+
+```{r chart-revenue-split}
+#| fig-width: 12
+#| fig-height: 6
+
+revenue_split <- tlc_with_zones %>%
+  mutate(time_of_day = if_else(is_night, "Night (8 PM - 4 AM)", "Day (4 AM - 8 PM)")) %>%
+  group_by(zone_class, time_of_day) %>%
+  summarise(revenue = sum(total_fare, na.rm = TRUE), .groups = "drop") %>%
+  mutate(zone_class = factor(zone_class, levels = c("Nightlife", "Other")))
+
+revenue_split <- revenue_split %>%
+  group_by(time_of_day) %>%
+  mutate(pct = round(100 * revenue / sum(revenue), 1)) %>%
+  ungroup()
+
+night_nl_pct <- revenue_split %>% 
+  filter(zone_class == "Nightlife", time_of_day == "Night (8 PM - 4 AM)") %>% 
+  pull(pct)
+
+ggplot(revenue_split, aes(x = time_of_day, y = revenue, fill = zone_class)) +
+  geom_col(position = "dodge", color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(pct, "%")), 
+            position = position_dodge(0.9), vjust = -0.3, fontface = "bold", size = 3.5) +
+  scale_fill_manual(values = c("Nightlife" = colors$nightlife, "Other" = colors$gray)) +
+  scale_y_continuous(labels = dollar_format(scale = 1e-6, suffix = "M"), 
+                     expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "Revenue Distribution: Nightlife vs Other Zones",
+    subtitle = "Nightlife zones dominate both day and night revenue",
+    x = "", y = "Revenue", fill = "Zone Type"
+  )
+```
+
+During nighttime hours, nightlife zones capture **`r night_nl_pct`%** of citywide revenue, far exceeding their `r pct_nightlife`% spatial footprint. Even during the day, nightlife zones remain economically strong, indicating that these districts serve as continuous activity hubs.
+
+---
+
+# Part 6: Temporal Patterns
+
+## Chart 7: Day of Week Revenue
+
+```{r chart-dow-revenue}
+#| fig-width: 12
+#| fig-height: 6
+
+dow_revenue <- tlc_with_zones %>%
+  filter(zone_class == "Nightlife") %>%
+  mutate(time_of_day = if_else(is_night, "Night (8 PM - 4 AM)", "Day (4 AM - 8 PM)")) %>%
+  group_by(pickup_dow, time_of_day) %>%
+  summarise(revenue = sum(total_fare, na.rm = TRUE), .groups = "drop") %>%
+  mutate(pickup_dow = factor(pickup_dow, levels = c("Monday", "Tuesday", "Wednesday", 
+                                                     "Thursday", "Friday", "Saturday", "Sunday")))
+
+night_revenue <- dow_revenue %>% filter(time_of_day == "Night (8 PM - 4 AM)")
+peak_night_row <- night_revenue %>% slice_max(revenue, n = 1)
+peak_day <- as.character(peak_night_row$pickup_dow)
+peak_night_rev <- peak_night_row$revenue
+
+ggplot(dow_revenue, aes(x = pickup_dow, y = revenue, fill = time_of_day)) +
+  geom_col(position = "dodge", color = "white", linewidth = 0.5) +
+  scale_fill_manual(values = c("Night (8 PM - 4 AM)" = colors$night, 
+                               "Day (4 AM - 8 PM)" = colors$day)) +
+  scale_y_continuous(labels = dollar_format(scale = 1e-6, suffix = "M")) +
+  labs(
+    title = "Nightlife Zone Revenue: Day vs Night by Day of Week",
+    subtitle = paste0("Peak night revenue: ", peak_day, " at $", round(peak_night_rev / 1e6, 1), "M"),
+    x = "", y = "Revenue", fill = ""
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Weekend nights, especially Friday and Saturday, show the strongest nightlife revenue. This weekly rhythm mirrors cultural behavior and supports operational planning—rideshare supply can be aligned with predictable nightlife cycles.
+
+## Chart 8: Monthly Trends Over Time
+
+```{r chart-yearly-heatmaps}
+#| fig-width: 14
+#| fig-height: 5
+
+# Nightlife zones monthly heatmap
+monthly_trips_nightlife <- tlc_with_zones %>%
+  filter(zone_class == "Nightlife") %>%
+  group_by(pickup_year, pickup_month) %>%
+  summarise(trips = sum(trips), .groups = "drop") %>%
+  mutate(
+    month_name = factor(month.abb[pickup_month], levels = month.abb),
+    pickup_year = factor(pickup_year)
+  )
+
+ggplot(monthly_trips_nightlife, aes(x = month_name, y = pickup_year, fill = trips)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = round(trips / 1e6, 1)), color = "black", size = 3.5, fontface = "bold") +
+  scale_fill_viridis_c(option = "plasma", labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Nightlife Zones: Monthly Trip Volume by Year",
+       subtitle = "Values in millions | Shows recovery trajectory from 2022 onwards",
+       x = "Month", y = "Year", fill = "Trips") +
+  theme(panel.grid = element_blank())
+```
+
+```{r chart-yearly-other}
+#| fig-width: 14
+#| fig-height: 5
+
+# Other zones monthly heatmap
+monthly_trips_other <- tlc_with_zones %>%
+  filter(zone_class == "Other") %>%
+  group_by(pickup_year, pickup_month) %>%
+  summarise(trips = sum(trips), .groups = "drop") %>%
+  mutate(
+    month_name = factor(month.abb[pickup_month], levels = month.abb),
+    pickup_year = factor(pickup_year)
+  )
+
+ggplot(monthly_trips_other, aes(x = month_name, y = pickup_year, fill = trips)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = round(trips / 1e6, 1)), color = "black", size = 3.5, fontface = "bold") +
+  scale_fill_viridis_c(option = "viridis", labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Other Zones: Monthly Trip Volume by Year",
+       subtitle = "Values in millions | Compare recovery patterns with nightlife zones",
+       x = "Month", y = "Year", fill = "Trips") +
+  theme(panel.grid = element_blank())
+```
+
+Monthly trip volumes show clear seasonality, with summer peaks and winter troughs. Both nightlife and other zones follow similar long-term patterns, indicating that hourly differences are not due to seasonal distortions but genuine behavioral differences across hours.
+
+---
+
+# Summary
+
+```{r summary-calcs}
+#| include: false
+
+nl_trips <- tlc_with_zones %>% filter(zone_class == "Nightlife") %>% 
+  summarise(t = sum(trips)) %>% pull(t)
+nl_revenue <- tlc_with_zones %>% filter(zone_class == "Nightlife") %>% 
+  summarise(r = sum(total_fare, na.rm = TRUE)) %>% pull(r)
+nl_avg_fare <- nl_revenue / nl_trips
+
+other_trips <- tlc_with_zones %>% filter(zone_class == "Other") %>% 
+  summarise(t = sum(trips)) %>% pull(t)
+other_revenue <- tlc_with_zones %>% filter(zone_class == "Other") %>% 
+  summarise(r = sum(total_fare, na.rm = TRUE)) %>% pull(r)
+other_avg_fare <- other_revenue / other_trips
+
+nl_night_rev <- tlc_with_zones %>% filter(zone_class == "Nightlife", is_night == TRUE) %>% 
+  summarise(rev = sum(total_fare, na.rm = TRUE)) %>% pull(rev)
+nl_day_rev <- tlc_with_zones %>% filter(zone_class == "Nightlife", is_night == FALSE) %>% 
+  summarise(rev = sum(total_fare, na.rm = TRUE)) %>% pull(rev)
+
+other_night_rev <- tlc_with_zones %>% filter(zone_class == "Other", is_night == TRUE) %>% 
+  summarise(rev = sum(total_fare, na.rm = TRUE)) %>% pull(rev)
+other_day_rev <- tlc_with_zones %>% filter(zone_class == "Other", is_night == FALSE) %>% 
+  summarise(rev = sum(total_fare, na.rm = TRUE)) %>% pull(rev)
+```
+
+```{r summary-table}
+summary_tbl <- tibble(
+  Metric = c("Total Trips", "Total Revenue", "Average Fare", 
+             "Night Revenue (8 PM - 4 AM)", "Day Revenue (4 AM - 8 PM)"),
+  `Nightlife Zone` = c(
+    format(nl_trips, big.mark = ","),
+    paste0("$", format(round(nl_revenue / 1e6, 1), nsmall = 1), "M"),
+    paste0("$", round(nl_avg_fare, 2)),
+    paste0("$", format(round(nl_night_rev / 1e6, 1), nsmall = 1), "M"),
+    paste0("$", format(round(nl_day_rev / 1e6, 1), nsmall = 1), "M")
+  ),
+  `Other Zone` = c(
+    format(other_trips, big.mark = ","),
+    paste0("$", format(round(other_revenue / 1e6, 1), nsmall = 1), "M"),
+    paste0("$", round(other_avg_fare, 2)),
+    paste0("$", format(round(other_night_rev / 1e6, 1), nsmall = 1), "M"),
+    paste0("$", format(round(other_day_rev / 1e6, 1), nsmall = 1), "M")
+  )
+)
+
+kable(summary_tbl, align = c("l", "r", "r"))
+```
+
+---
+
+# Key Findings
+
+## Answering the Specific Question
+
+**SQ: How do rideshare trip volumes change by hour in nightlife zones compared to the rest of NYC?**
+
+The evidence is clear and compelling:
+
+1. **Temporal Divergence:** Nightlife zones sustain high trip volumes from 8 PM through 4 AM, while other zones drop sharply after 11 PM. The surge index peaks at `r peak_hour`:00 AM with a value of `r peak_surge`, meaning nightlife zones capture `r round((peak_surge - 1) * 100)`% more trips than their daily average during peak hours.
+
+2. **Economic Concentration:** Despite representing only `r pct_nightlife`% of taxi zones, nightlife zones capture `r nightlife_trip_pct`% of trips and `r nightlife_rev_pct`% of revenue citywide. During nighttime hours, this share rises to `r night_nl_pct`%.
+
+3. **Predictable Patterns:** Weekend nights (Friday and Saturday, 10 PM – 2 AM) show the strongest demand, with clear weekly and seasonal rhythms that enable forecasting.
+
+## Connection to Overarching Question
+
+These findings directly support the OQ by quantifying the *temporal* dimension of nightlife's economic impact. While teammates examine crime patterns (Richa), noise complaints (Dolma), COVID recovery (Apu), and employment impacts (Chhin), this analysis establishes that nightlife drives a measurable and predictable transportation economy that operates on a fundamentally different temporal schedule than the rest of the city.
+
+## Stakeholder Implications
+
+**Transportation Planners:** Nightlife zones show predictable demand patterns with surge index peaking at `r peak_hour`:00. Monthly trends reveal seasonal patterns useful for capacity planning.
+
+**Rideshare Drivers:** Position in nightlife zones during weekend nights (9 PM – 2 AM) for maximum earnings. These `r n_nightlife_zones` zones generate `r nightlife_rev_pct`% of total revenue with average fares of $`r round(nl_avg_fare, 2)` vs $`r round(other_avg_fare, 2)` elsewhere.
+
+**Policy Makers:** A small geographic footprint—`r n_nightlife_zones` zones (`r pct_nightlife`%)—drives outsized late-night demand. This concentration justifies targeted transportation and public safety investments.
+
+---
+
+# Limitations
+
+1. **Yelp Data Coverage:** Venues without active Yelp profiles are not captured, potentially undercounting nightlife establishments.
+
+2. **Threshold Sensitivity:** The ≥5 venue threshold is somewhat arbitrary. Sensitivity analysis (available upon request) shows results are robust to thresholds between 3 and 10.
+
+3. **Pickup vs. Dropoff:** This analysis focuses on pickup locations. Dropoff patterns may differ and represent an avenue for future work.
+
+4. **Tips Data:** Cash tips are not recorded, potentially understating total driver revenue.
+
+5. **Venue Permanence:** Yelp data represents a snapshot; venue openings and closures during the study period are not tracked.
+
+---
+
+# Future Work
+
+With additional time or resources, this analysis could be extended to:
+
+- Incorporate dropoff location analysis to understand bidirectional flow
+- Compare nightlife zones' COVID recovery trajectory to other zone types
+- Build predictive models for hourly demand by zone
+- Analyze tip patterns and driver earnings optimization strategies
+
+---
+
+*Analysis: STA 9750 — Nightlife Analytics Project*
+*Data: NYC TLC HVFHV Records (`r date_min` – `r date_max`) + Yelp API*
+*Nightlife Definition: 8 PM – 4 AM | Zones with ≥5 venues*
