@@ -1347,7 +1347,7 @@ These findings directly support the OQ by quantifying the *temporal* dimension o
 6. **Causal Inference:** While our permutation test confirms significant differences between zone types, we cannot establish that nightlife venues *cause* increased rideshare activity—the relationship may be bidirectional or driven by confounding factors (e.g., population density, transit access).
 
 ---
-
+ 
 # Future Work
 
 With additional time or resources, this analysis could be extended to:
