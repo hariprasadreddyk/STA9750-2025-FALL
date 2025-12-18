@@ -88,7 +88,7 @@ This analysis examines **684 million rideshare trips** across 36 months (January
 
 ## Project Context
 
-This individual report is part of the **Nightlife Analytics: The Economics of Cities After Dark** group project for STA 9750. Our team examines how nightlife activity impacts New York City across multiple dimensions.
+This individual report is part of the **Nightlife Analytics: The Economics of Cities After Dark** group project for STA 9750. Our team examines how nightlife activity impacts New York City across multiple dimensions. The full group summary report is available at: [Group Project Report](https://dolmadev.github.io/STA9750-2025-FALL/Group_Project.html).
 
 **Overarching Question (OQ):** *How does nightlife activity—bars, entertainment, and rideshares—drive NYC economies and affect city safety and life quality?*
 
@@ -1347,7 +1347,7 @@ These findings directly support the OQ by quantifying the *temporal* dimension o
 6. **Causal Inference:** While our permutation test confirms significant differences between zone types, we cannot establish that nightlife venues *cause* increased rideshare activity—the relationship may be bidirectional or driven by confounding factors (e.g., population density, transit access).
 
 ---
- 
+
 # Future Work
 
 With additional time or resources, this analysis could be extended to:
@@ -1363,3 +1363,4 @@ With additional time or resources, this analysis could be extended to:
 *Analysis: STA 9750 — Nightlife Analytics Project*
 *Data: NYC TLC HVFHV Records (`r date_min` – `r date_max`) + Yelp API*
 *Nightlife Definition: 8 PM – 4 AM | Zones with ≥5 venues*
+*Group Report: [https://dolmadev.github.io/STA9750-2025-FALL/Group_Project.html](https://dolmadev.github.io/STA9750-2025-FALL/Group_Project.html)*
